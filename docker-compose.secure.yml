@@ -1,0 +1,74 @@
+# ----------------------------------------------------------------------
+# TAVARDT Elite Secure Docker Compose / Swarm Template
+# ----------------------------------------------------------------------
+# Description: A corporate-grade configuration demonstrating how to 
+# lock down container environments at runtime.
+# ----------------------------------------------------------------------
+
+version: '3.8'
+
+services:
+  web_api:
+    image: my-registry.tavardt.com/elite-api:v1.2.0
+    restart: unless-stopped
+    ports:
+      - "8080:3000"
+    
+    # 1. Resource Limits (Vital)
+    # Prevents this container from consuming 100% of host CPU/RAM and 
+    # taking down the entire server (Noisy Neighbor problem).
+    deploy:
+      resources:
+        limits:
+          cpus: '0.50'
+          memory: 512M
+        reservations:
+          cpus: '0.10'
+          memory: 128M
+
+    # 2. Immutable Filesystem (The Ultimate Shield)
+    # Makes the container's hard drive read-only.
+    # If a hacker breaches the app, they CANNOT download or install malware.
+    read_only: true
+
+    # 3. Temporary Write Space (For logs/tmp)
+    # Since the system is read_only, we mount temporary RAM disks for vital operations.
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=65536k
+      - /app/logs:rw,noexec,nosuid,size=65536k
+
+    # 4. Privilege Escalation Prevention
+    # Stops the container processes from gaining new privileges using setuid/setgid.
+    security_opt:
+      - no-new-privileges:true
+
+    # 5. Drop Linux Capabilities
+    # Containers run with a default set of kernel capabilities. We drop ALL of them,
+    # then explicitly add back only what is absolutely necessary (e.g., binding to a port).
+    cap_drop:
+      - ALL
+    # cap_add:
+    #   - NET_BIND_SERVICE # Only needed if the app binds to port < 1024
+
+    # 6. Network Isolation
+    # Place this service in an isolated backend network, inaccessible from the outside 
+    # except via the API Gateway.
+    networks:
+      - backend_isolated
+
+    # 7. Secure Environment Variables (Do NOT use .env files for secrets)
+    # In Swarm, use Docker Secrets instead of plain text environment variables.
+    secrets:
+      - db_password
+      - api_key
+
+networks:
+  backend_isolated:
+    driver: overlay
+    internal: true # Cannot talk to the external internet directly
+
+secrets:
+  db_password:
+    external: true
+  api_key:
+    external: true

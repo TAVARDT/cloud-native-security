@@ -1,0 +1,72 @@
+# ----------------------------------------------------------------------
+# TAVARDT Elite Hardened Dockerfile Template
+# ----------------------------------------------------------------------
+# Description: This is the definitive B2B standard for building container 
+# images. It uses a "Multi-stage Build" to ensure the final production 
+# image does not contain compiler tools (which hackers love to use), and 
+# enforces execution as an unprivileged user.
+# ----------------------------------------------------------------------
+
+# ==========================================
+# STAGE 1: The Builder (Heavy, unsecure)
+# ==========================================
+# Use a fat image to install dependencies and compile the code.
+FROM node:20-alpine AS builder
+
+# Set working directory
+WORKDIR /app
+
+# Copy package descriptors
+COPY package*.json ./
+
+# Install ALL dependencies (including devDependencies needed for build)
+RUN npm ci
+
+# Copy the rest of the application code
+COPY . .
+
+# Build the application (e.g., Next.js, NestJS, TypeScript)
+RUN npm run build
+
+# Remove development dependencies to save space and reduce attack surface
+RUN npm prune --production
+
+# ==========================================
+# STAGE 2: Production (Lightweight, Secure)
+# ==========================================
+# Start fresh from a tiny, secure base image
+FROM node:20-alpine AS production
+
+# Security: Update Alpine packages to patch known OS vulnerabilities
+RUN apk update && apk upgrade --no-cache
+
+# Set environment to production
+ENV NODE_ENV=production
+
+# Create an unprivileged user and group (UID 10001)
+# Do NOT run as root. Root inside the container can sometimes mean root on the host.
+RUN addgroup -g 10001 tavardtgroup && \
+    adduser -D -u 10001 -G tavardtgroup tavardtuser
+
+WORKDIR /app
+
+# Copy ONLY the built artifacts and production dependencies from STAGE 1
+# Ensure the new unprivileged user owns these files.
+COPY --from=builder --chown=tavardtuser:tavardtgroup /app/node_modules ./node_modules
+COPY --from=builder --chown=tavardtuser:tavardtgroup /app/dist ./dist
+# If using Next.js, copy the .next folder instead of dist:
+# COPY --from=builder --chown=tavardtuser:tavardtgroup /app/.next ./.next
+COPY --from=builder --chown=tavardtuser:tavardtgroup /app/package.json ./package.json
+
+# Switch to the unprivileged user immediately
+USER 10001
+
+# Expose the application port
+EXPOSE 3000
+
+# Define the Healthcheck (Docker uses this to know if the app crashed)
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+  CMD wget --no-verbose --tries=1 --spider http://localhost:3000/api/health || exit 1
+
+# Execute the application securely
+CMD ["npm", "start"]
